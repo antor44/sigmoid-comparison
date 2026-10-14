@@ -2,13 +2,13 @@
 
 After researching several implementations of basic algorithms in low-level Machine Learning, such as logistic regression, we found that the most computationally expensive operation for the processor is typically the calculation of the sigmoid function or computing exp on individual elements of a matrix.
 
-For the calculation of the exponential function, most implementations rely on the standard mathematical libraries of their respective programming languages. However, performance may vary slightly depending on the compiler implementation, C runtime, and the processor architecture. No single software algorithm achieves optimal speed and accuracy across the entire range of input values, so libraries often implement several different algorithms. Traditional methods such as Taylor polynomial calculations or the Maclaurin expansion are generally inefficient for this purpose.
+For the calculation of the exponential function, most implementations rely on the standard mathematical libraries of their respective programming languages. However, performance may vary slightly depending on the compiler implementation, C runtime, and the processor architecture. No single software algorithm achieves optimal speed and accuracy across the entire range of input values, so libraries often implement several different algorithms. Traditional methods such as Taylor/Maclaurin polynomial expansions are generally inefficient for this purpose.
 
 Modern techniques often involve the use of lookup tables to store precalculated values, combined with polynomial adjustments to approximate the exponential function across a wider range of values. These algorithms utilize a series of techniques, such as range reduction and polynomial evaluation, to accurately and efficiently calculate the exponential function. This includes double-precision floating-point operations, bit manipulation, and advanced mathematical calculations to handle special cases and optimize performance.
 
-Some advanced algorithms, like [avx_mathfun](https://github.com/reyoung/avx_mathfun), use range reduction in combination with a Chebyshev approximation-based polynomial to compute exponentials in parallel using AVX instructions.
+Some advanced algorithms, like [avx_mathfun](https://github.com/reyoung/avx_mathfun), use range reduction in combination with a minimax polynomial approximation to compute exponentials in parallel using AVX instructions.
 
-For higher precision variables beyond double precision, such as [quad precision or 128 bits](https://codebrowser.dev/glibc/glibc/sysdeps/ieee754/ldbl-128/e_expl.c.html), the standard C library employs an algorithm using Abraham Ziv's formula, ['Fast Evaluation of Elementary Mathematical Functions with Correctly Rounded Last Bit'](https://dl.acm.org/doi/abs/10.1145/114697.116813).
+For higher precision variables beyond double precision, such as [quad precision or 128 bits](https://codebrowser.dev/glibc/glibc/sysdeps/ieee754/ldbl-128/e_expl.c.html), the standard C library uses specialized algorithms; Abraham Ziv's work on correctly rounded elementary functions, ['Fast Evaluation of Elementary Mathematical Functions with Correctly Rounded Last Bit'](https://dl.acm.org/doi/abs/10.1145/114697.116813), is a relevant reference in this area.
 
 ---
 
@@ -44,7 +44,7 @@ The Assembly code implements a conventional Taylor algorithm but does not includ
 
 The gcc exp and gcc expf codes are based on functions from the standard mathematical library in C.
 
-The gcc AVX2 code is based on the same algorithm as avx_mathfun. It utilizes range reduction in combination with a Chebyshev approximation-based polynomial to compute 8 exponentials in parallel with AVX2 instructions.
+The gcc AVX2 code is based on the same algorithm as avx_mathfun. It utilizes range reduction in combination with a minimax polynomial approximation to compute 8 exponentials in parallel with AVX2 instructions.
 
 
 ## Comparison of C Multithreading Codes from Different Approaches, same base algorithm:
@@ -318,5 +318,8 @@ While simplifying or substituting the sigmoid function can affect precision, the
 - Most relevant for algorithms where sigmoid/exp is a significant bottleneck (logistic regression, GLMs, shallow networks).
 - Less impactful for deep neural networks where GEMM operations dominate.
 - Actual speedup in production depends on: memory bandwidth, data loading, other pipeline operations, and hardware configuration.
+
+The optimal choice will depend on the specific problem and application requirements. Performance may vary significantly depending on the programming language, libraries, compiler implementation, runtime environment, and processor architecture.
+
 
 The optimal choice will depend on the specific problem and application requirements. Performance may vary significantly depending on the programming language, libraries, compiler implementation, runtime environment, and processor architecture.
