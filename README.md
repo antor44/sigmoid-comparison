@@ -103,7 +103,7 @@ All codes are either based on the same algorithm or share the same relative erro
 ### Validity of the Statement: From Classic ML to Modern LLMs
 - **Classic ML & Shallow Networks:** In basic implementations like **logistic regression**, **GLMs**, and **shallow networks**, the calculation of the sigmoid function (which involves `exp()`) is indeed one of the most computationally expensive operations when applied element-wise to large matrices.
 - **Classic Deep Neural Networks (CNNs / MLPs):** Matrix operations (GEMM) typically dominate total compute time, making activation function optimization less impactful on end-to-end training performance, while `ReLU` largely replaced sigmoid in hidden layers.
-- **Modern Deep Learning (LLMs & Transformers):** In state-of-the-art architectures (such as GPT, LLaMA, and Vision Transformers), `ReLU` has been widely replaced by smooth activation functions like **SiLU / Swish** (`x * sigmoid(x)`) and **GELU**. Because `SiLU` directly depends on the sigmoid function, fast SIMD approximations of `exp(x)` and `sigmoid(x)` have become critical once again—particularly for CPU and edge-device inference engines (e.g., `llama.cpp` and `GGML`).
+- **Modern Deep Learning (LLMs & Transformers):** In state-of-the-art architectures (such as GPT, LLaMA, and Vision Transformers), `ReLU` has been widely replaced by smooth activation functions like **SiLU / Swish** (`x * sigmoid(x)`) and **GELU`. Because `SiLU` directly depends on the sigmoid function, fast SIMD approximations of `exp(x)` and `sigmoid(x)` have become critical once again—particularly for CPU and edge-device inference engines (e.g., `llama.cpp` and `GGML`).
 
 ### Simplification or Substitution of the Sigmoid Function
 There are various approximations and alternatives to the sigmoid function:
@@ -210,6 +210,8 @@ plt.show()
 ```
 
 > 📝 **Note on the Python Benchmark:** In the script above, MSE is calculated against `Sigmoid Original` across all functions in the loop. While MSE measures true approximation error for the *Linear* and *Polynomial* approximations, for *ReLU* it serves only as a reference of geometric divergence, since ReLU is a structural activation alternative rather than a numerical approximation of the sigmoid curve. Notice also that total execution time in this script includes formatting and writing three columns (`x`, `exp(x)`, and `y`) to disk for each function.
+>
+> ⚠️ **Measured results (reference run of this exact script, single-threaded, float32):** `Sigmoid Original` ≈ 234 s, `Linear Approximation` ≈ 176 s, `Polynomial Approximation` ≈ 1138 s, `ReLU` ≈ 51 s. The **Polynomial Approximation is the slowest of the four**, ~5x slower than the original sigmoid. This is not a property of the approximation itself, but of how it is written in NumPy: `x**3` has no fast path, so NumPy dispatches it to the generic `np.power` ufunc, which is much slower than the already SIMD-vectorized `np.exp`. Rewriting it as `x*x*x` (or evaluating it inside a fused kernel) removes this penalty; even then, in plain NumPy it only reaches roughly the speed of the original sigmoid, since the expression still compiles to several eager passes. The clear speed advantage of arithmetic approximations appears at the fused-kernel level (C/AVX2, Numba, JAX, `torch.compile`, etc.), not in composed NumPy expressions.
 
 ![Sigmoid comparison](https://github.com/antor44/sigmoid-comparison/blob/main/sigmoid_comparison.jpg)
 
@@ -226,12 +228,12 @@ In the case of the sigmoid function, the computation involves an additional addi
 These performance gains in C are specific to scenarios involving explicit vectorization through SIMD (Single Instruction, Multiple Data), where multiple data points are processed in parallel.
 
 > 🔬 **Why does C (AVX2) beat NumPy by ~2x, and why does Sigmoid add 20–50% overhead?**
-> 1. **Kernel Fusion vs. Temporary Memory Arrays:** Even though modern **NumPy (2.x)** uses Universal SIMD intrinsics (Google Highway / Intel SVML / SLEEF) to vectorize array operations, evaluating `1 / (1 + np.exp(-x))` in standard NumPy still executes four separate steps, allocating **three intermediate temporary arrays** in memory (`-x`, `exp`, `+ 1`). In contrast, a custom C AVX2 loop performs **kernel fusion**, keeping all intermediate values inside the CPU's 256-bit `YMM` registers without redundant round-trips to RAM.
+> 1. **Kernel Fusion vs. Temporary Memory Arrays:** Even though modern **NumPy (2.x)** vectorizes many array operations with its own universal SIMD intrinsics layer (`npyv`, an API inspired by Google Highway and comparable in purpose to Intel SVML / SLEEF), evaluating `1 / (1 + np.exp(-x))` in standard NumPy still executes four separate steps, allocating **three intermediate temporary arrays** in memory (`-x`, `exp`, `+ 1`). In contrast, a custom C AVX2 loop performs **kernel fusion**, keeping all intermediate values inside the CPU's 256-bit `YMM` registers without redundant round-trips to RAM.
 > 2. **Hardware Division Latency (`vdivps`):** Computing `expf()` via a minimax polynomial in AVX2 takes roughly ~18–24 clock cycles per 8 floats using Fused Multiply-Add (`FMA`). Adding the full sigmoid requires a vectorized floating-point division (`_mm256_div_ps` / `vdivps`), which has a latency of ~11–14 cycles on modern x86 CPUs—explaining the exact **20–50% kernel overhead** measured in our tests.
 
 Additionally, optimizations can be applied not just to `exp(x)`, but to the entire sigmoid function. For example, approximations of the entire sigmoid function using polynomial or rational functions can be employed, which replace the original formula with simpler arithmetic operations (avoiding the costly division instruction altogether). This further reduces the computational load, especially in critical performance scenarios. 
 
-When utilizing multithreading, the speedup is almost perfectly linear, with gains scaling `1:1` relative to the number of CPU cores available.
+When utilizing multithreading, the speedup is approximately linear as long as the working set fits in cache and physical cores are available; once memory bandwidth saturates (very large arrays, or more threads than physical cores), scaling drops below `1:1`.
 
 For context, NumPy's performance in this type of single-threaded, CPU-bound scenario—where entire matrices are passed to functions—is comparable to what one might observe in MATLAB or Octave without explicit GPU acceleration. Note that MATLAB provides relatively straightforward multithreading options, whereas achieving comparable parallelism in Octave requires more effort.
 
@@ -240,12 +242,12 @@ For context, NumPy's performance in this type of single-threaded, CPU-bound scen
 ## 📊 Key Observations
 
 ### 1. Performance
-Approximations and alternatives are usually significantly faster than the original sigmoid **at the kernel level**.
+At the fused-kernel level (hand-written C/AVX2 or JIT-compiled code), arithmetic approximations of the sigmoid are significantly faster than the original, because they replace `exp()` and the division with a few multiplications and additions. **This advantage does not automatically transfer to composed NumPy expressions:** in the benchmark above, `ReLU` was clearly the fastest (~4.6x faster than the original sigmoid) and the `Linear Approximation` was moderately faster (~1.3x), while the `Polynomial Approximation`, as written, was the slowest of the four due to the `x**3` → `np.power` pitfall described in the note above.
 
 ### 2. Accuracy
-- **Linear approximation:** Fastest but least accurate.
-- **Polynomial approximation:** Good balance between speed and accuracy within bounded intervals.
-- **ReLU:** Very fast but has different behavior, which changes learning dynamics compared to bounded probabilities.
+- **Linear approximation:** The fastest of the two sigmoid approximations, but also the least accurate.
+- **Polynomial approximation:** A good balance between speed and accuracy within bounded intervals, although it is not bounded to `[0, 1]` (it slightly overshoots near the ends of the interval, so it should not be treated as a strict probability).
+- **ReLU:** The fastest of all, but with different behavior, which changes learning dynamics compared to bounded probabilities.
 
 ### 3. Impact on Algorithms
 - For **logistic regression** and **shallow networks**, an accurate sigmoid approximation can maintain good model precision while significantly improving kernel performance.
@@ -265,7 +267,7 @@ While simplifying or substituting the sigmoid function can affect precision, the
 **These benchmarks demonstrate that:**
 - Optimized C implementations with SIMD instructions (AVX2) can achieve ~2x speedup over standard NumPy for isolated `exp`/`sigmoid` kernels.
 - Sigmoid adds approximately 20–50% overhead compared to raw `exp()` computation at the kernel level.
-- Multithreading scales nearly linearly (`1:1`) for these embarrassingly parallel operations.
+- Multithreading scales approximately linearly (`~1:1`) for these embarrassingly parallel operations, as long as the working set stays in cache and physical cores are available.
 
 **Real-world applicability:**
 - Most relevant for algorithms where `sigmoid`/`exp` is a significant bottleneck (logistic regression, GLMs, shallow networks, or CPU inference with `SiLU`/sigmoid gates).
